@@ -1,0 +1,304 @@
+---
+title: "ClusteringAnalysis"
+author: "Yi Hao"
+date: "11/4/2025"
+output: html_document
+---
+
+```{r}
+setwd("/Users/haoyi/Documents/CourseSlidesUNC/BIOS611/MyProjectYH/clustering_project")
+
+```
+
+```{r}
+install.packages("plotly")
+library(cluster)
+library(ggplot2)
+library(plotly)
+library(dplyr)
+library(tidyr)
+```
+
+```{r}
+# Function to generate hypercube clusters
+generate_hypercube_clusters <- function(n, k, side_length, noise_sd = 1.0) {
+  # Generate n cluster centers at positive corners of hypercube
+  centers <- diag(side_length, n)
+  
+  # Generate k points for each cluster
+  data_list <- lapply(1:n, function(i) {
+    cluster_center <- centers[i, ]
+    # Generate k points with Gaussian noise around the center
+    points <- matrix(rnorm(n * k, mean = 0, sd = noise_sd), nrow = k, ncol = n)
+    # Add cluster center to each point
+    points <- sweep(points, 2, cluster_center, "+")
+    return(points)
+  })
+  
+  # Combine all clusters
+  data <- do.call(rbind, data_list)
+  labels <- rep(1:n, each = k)
+  
+  return(list(data = data, labels = labels))
+}
+
+
+run_gap_simulation_task1 <- function() {
+  dimensions <- c(6, 5, 4, 3, 2)
+  k_points <- 100
+  noise_sd <- 1.0
+  
+  results <- data.frame()
+  
+  for (n in dimensions) {
+    cat(sprintf("Processing dimension n = %d\n", n))
+    
+    # Test side lengths from 10 down to 1
+    side_lengths <- seq(10, 1, by = -0.5)
+    
+    for (side_length in side_lengths) {
+      cat(sprintf("  Side length = %.1f\n", side_length))
+      
+      # Generate data
+      dataset <- generate_hypercube_clusters(n, k_points, side_length, noise_sd)
+      data_matrix <- dataset$data
+      
+      # Run clusGap
+      gap_result <- clusGap(data_matrix, 
+                           FUN = kmeans, 
+                           K.max = min(10, n + 2),
+                           B = 50,
+                           nstart = 20,
+                           iter.max = 50)
+      
+      # Estimate number of clusters
+      estimated_k <- maxSE(gap_result$Tab[, "gap"], 
+                          gap_result$Tab[, "SE.sim"],
+                          method = "firstSEmax")
+      
+      results <- rbind(results, data.frame(
+        dimension = n,
+        side_length = side_length,
+        estimated_clusters = estimated_k,
+        true_clusters = n
+      ))
+    }
+  }
+  
+  return(results)
+}
+
+```
+
+```{r}
+# Function to visualize Task 1 results
+plot_task1_results <- function(results) {
+  p <- ggplot(results, aes(x = side_length, y = estimated_clusters)) +
+    geom_line(color = "blue", size = 1) +
+    geom_point(color = "blue", size = 2) +
+    geom_hline(aes(yintercept = true_clusters), 
+               color = "red", linetype = "dashed", size = 1) +
+    facet_wrap(~ dimension, scales = "free_y", 
+               labeller = labeller(dimension = function(x) paste("n =", x))) +
+    labs(title = "Gap Statistic: Estimated Number of Clusters vs Side Length",
+         subtitle = "Red dashed line indicates true number of clusters",
+         x = "Side Length",
+         y = "Estimated Number of Clusters") +
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+          plot.subtitle = element_text(hjust = 0.5),
+          strip.text = element_text(face = "bold"))
+  
+  return(p)
+}
+
+```
+
+```{r}
+# Task 1: Run simulation and create plots
+cat("Starting Task 1: Gap Statistic Simulation\n")
+cat("==========================================\n")
+task1_results <- run_gap_simulation_task1()
+task1_plot <- plot_task1_results(task1_results)
+ggsave("task1_gap_statistic.png", task1_plot, width = 12, height = 8)
+cat("Task 1 plot saved as 'task1_gap_statistic.png'\n\n")
+
+```
+
+```{r}
+write.csv(task1_results, "task1_results.csv", row.names = FALSE)
+```
+
+
+
+```{r}
+# Task 2
+# Function to generate shell clusters
+generate_shell_clusters <- function(n_shells, k_per_shell, max_radius, noise_sd = 0.1) {
+  # Generate radii evenly spaced
+  if (n_shells == 1) {
+    radii <- max_radius
+  } else {
+    inner_radius <- max_radius / (2 * n_shells)
+    radii <- seq(inner_radius, max_radius, length.out = n_shells)
+  }
+  
+  data_list <- list()
+  labels <- c()
+  
+  for (i in 1:n_shells) {
+    radius <- radii[i]
+    
+    # Generate random points on sphere with given radius
+    # Using method: generate random normal vectors and normalize
+    points <- matrix(rnorm(k_per_shell * 3), nrow = k_per_shell, ncol = 3)
+    # Normalize to unit sphere
+    norms <- sqrt(rowSums(points^2))
+    points <- points / norms
+    
+    # Scale to desired radius with noise
+    noisy_radii <- radius + rnorm(k_per_shell, mean = 0, sd = noise_sd)
+    points <- points * noisy_radii
+    
+    data_list[[i]] <- points
+    labels <- c(labels, rep(i, k_per_shell))
+  }
+  
+  data <- do.call(rbind, data_list)
+  colnames(data) <- c("X", "Y", "Z")
+  
+  return(list(data = data, labels = labels))
+}
+
+# Function to create interactive 3D plot
+plot_shells_3d <- function(data, labels) {
+  df <- data.frame(data, Cluster = as.factor(labels))
+  
+  p <- plot_ly(df, x = ~X, y = ~Y, z = ~Z, color = ~Cluster,
+               type = "scatter3d", mode = "markers",
+               marker = list(size = 3)) %>%
+    layout(title = "Concentric Shell Clusters in 3D",
+           scene = list(
+             xaxis = list(title = "X"),
+             yaxis = list(title = "Y"),
+             zaxis = list(title = "Z")
+           ))
+  
+  return(p)
+}
+
+# Spectral clustering wrapper function
+spectral_clustering <- function(x, k, d_threshold = 1) {
+  n <- nrow(x)
+  
+  # Step 1: Build adjacency matrix
+  dist_matrix <- as.matrix(dist(x, method = "euclidean"))
+  A <- (dist_matrix < d_threshold) * 1
+  diag(A) <- 0
+  
+  # Step 2: Compute degree matrix and Laplacian
+  D <- diag(rowSums(A))
+  L <- D - A
+  
+  # Step 3: Compute normalized Laplacian
+  D_inv_sqrt <- diag(1 / sqrt(diag(D) + 1e-10))
+  L_sym <- D_inv_sqrt %*% L %*% D_inv_sqrt
+  
+  # Step 4: Eigen-decomposition
+  eigen_result <- eigen(L_sym, symmetric = TRUE)
+  
+  # Get k smallest eigenvalues (largest in descending order from eigen())
+  eigenvectors <- eigen_result$vectors[, (n-k+1):n]
+  
+  # Step 5: Run k-means on eigenvectors
+  km_result <- kmeans(eigenvectors, centers = k, nstart = 20, iter.max = 50)
+  
+  return(km_result)
+}
+
+# Function to run gap statistic simulation for Task 2
+run_gap_simulation_task2 <- function(d_threshold = 1) {
+  n_shells <- 4
+  k_per_shell <- 100
+  noise_sd <- 0.1
+  
+  # Test max_radius from 10 down to 0
+  max_radii <- seq(10, 0.5, by = -0.5)
+  
+  results <- data.frame()
+  
+  for (max_radius in max_radii) {
+    cat(sprintf("Processing max_radius = %.1f\n", max_radius))
+    
+    # Generate data
+    dataset <- generate_shell_clusters(n_shells, k_per_shell, max_radius, noise_sd)
+    data_matrix <- dataset$data
+    
+    # Run clusGap with spectral clustering
+    gap_result <- clusGap(data_matrix,
+                         FUN = function(x, k) {
+                           spectral_clustering(x, k, d_threshold = d_threshold)
+                         },
+                         K.max = min(10, n_shells + 2),
+                         B = 50)
+    
+    # Estimate number of clusters
+    estimated_k <- maxSE(gap_result$Tab[, "gap"],
+                        gap_result$Tab[, "SE.sim"],
+                        method = "firstSEmax")
+    
+    results <- rbind(results, data.frame(
+      max_radius = max_radius,
+      estimated_clusters = estimated_k,
+      true_clusters = n_shells,
+      d_threshold = d_threshold
+    ))
+  }
+  
+  return(results)
+}
+
+
+```
+
+```{r}
+plot_task2_results <- function(results) {
+  p <- ggplot(results, aes(x = max_radius, y = estimated_clusters)) +
+    geom_line(color = "blue", size = 1) +
+    geom_point(color = "blue", size = 2) +
+    geom_hline(yintercept = 4, color = "red", linetype = "dashed", size = 1) +
+    labs(title = "Spectral Clustering: Estimated Number of Clusters vs Maximum Radius",
+         subtitle = sprintf("Red dashed line indicates true number of clusters (4)\nd_threshold = %.1f",
+                           unique(results$d_threshold)),
+         x = "Maximum Radius",
+         y = "Estimated Number of Clusters") +
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+          plot.subtitle = element_text(hjust = 0.5))
+  
+  return(p)
+}
+```
+
+```{r}
+# Task 2: Generate sample data and create 3D visualization
+cat("Starting Task 2: Spectral Clustering\n")
+cat("=====================================\n")
+cat("Generating sample shell dataset for visualization...\n")
+sample_shells <- generate_shell_clusters(4, 100, 10, 0.1)
+shell_plot_3d <- plot_shells_3d(sample_shells$data, sample_shells$labels)
+htmlwidgets::saveWidget(shell_plot_3d, "task2_shells_3d.html")
+cat("3D plot saved as 'task2_shells_3d.html'\n\n")
+
+# Task 2: Run simulation
+cat("Running spectral clustering simulation...\n")
+task2_results <- run_gap_simulation_task2(d_threshold = 1)
+task2_plot <- plot_task2_results(task2_results)
+ggsave("task2_spectral_clustering.png", task2_plot, width = 10, height = 6)
+cat("Task 2 plot saved as 'task2_spectral_clustering.png'\n\n")
+
+```
+
+```{r}
+write.csv(task2_results, "task2_results.csv", row.names = FALSE)
+```
